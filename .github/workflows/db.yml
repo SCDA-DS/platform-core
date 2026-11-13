@@ -1,0 +1,29 @@
+name: Deploy database
+
+# Pushes supabase/migrations to the Supabase project. Safe alongside the Supabase GitHub
+# integration: both record applied migrations in supabase_migrations.schema_migrations.
+# Needs the secret SUPABASE_DB_URL (session pooler connection string).
+on:
+  push:
+    branches: [main]
+    paths: ['supabase/migrations/**']
+  workflow_dispatch:
+
+concurrency:
+  group: supabase-db
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+      - name: Push core migrations
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          if [ -z "$DATABASE_URL" ]; then echo "::error::SUPABASE_DB_URL secret is not available to this repo"; exit 1; fi
+          supabase db push --remote="$DATABASE_URL" --yes
