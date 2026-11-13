@@ -11,3 +11,4 @@ Thumbs.db
 supabase/.temp/
 supabase/.branches/
 coverage/
+package-lock.json

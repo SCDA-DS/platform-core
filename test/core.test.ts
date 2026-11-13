@@ -150,3 +150,28 @@ describe('tool schemas', () => {
     expect(u.ok).toBe(true);
   });
 });
+
+describe('account deletion', () => {
+  const [SOLO, HEIR, LONER] = [11, 12, 13].map(uid);
+
+  it('refuses while you are the only owner of an org with other members', async () => {
+    await t.user(SOLO, { name: 'solo' });
+    await t.user(HEIR, { name: 'heir' });
+    const [{ id: shared }] = await t.as<{ id: string }>(SOLO, `select id from public.create_org('Shared Org', 'shared-org', null)`);
+    await t.db.query(`insert into public.org_members (org_id, user_id) values ($1, $2)`, [shared, HEIR]);
+    await fails(t.as(SOLO, `select public.delete_my_account()`), /Make someone else an owner of Shared Org first/);
+    await t.as(SOLO, `select public.set_member_access($1, $2, 'owner')`, [shared, HEIR]);
+    await t.as(SOLO, `select public.delete_my_account()`);
+    expect(await t.as(HEIR, `select id from public.profiles where id = $1`, [SOLO])).toHaveLength(0);
+    expect((await t.as(HEIR, `select user_id from public.org_members where org_id = $1`, [shared])).map((r) => r.user_id)).toEqual([HEIR]);
+  });
+
+  it('deletes orgs where you were the only member, and needs you signed in', async () => {
+    await t.user(LONER, { name: 'loner' });
+    const [{ id: lonely }] = await t.as<{ id: string }>(LONER, `select id from public.create_org('Lonely Org', 'lonely-org', null)`);
+    await t.as(LONER, `select public.delete_my_account()`);
+    expect((await t.db.query(`select id from public.orgs where id = $1`, [lonely])).rows).toHaveLength(0);
+    expect((await t.db.query(`select id from auth.users where id = $1`, [LONER])).rows).toHaveLength(0);
+    await fails(t.as(null, `select public.delete_my_account()`), /permission denied/);
+  });
+});
