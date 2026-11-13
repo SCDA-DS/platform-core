@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: platform-core
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ github.repository_owner }}/shared-kit
+          path: shared-kit
+          token: ${{ secrets.SHARED_KIT_TOKEN || github.token }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --no-fund --no-audit
+        working-directory: shared-kit
+      - run: npm install --no-fund --no-audit
+        working-directory: platform-core
+      - run: npm test
+        working-directory: platform-core
