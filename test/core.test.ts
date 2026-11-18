@@ -175,3 +175,39 @@ describe('account deletion', () => {
     await fails(t.as(null, `select public.delete_my_account()`), /permission denied/);
   });
 });
+
+describe('site admins and blocking', () => {
+  const [FIRST, SECOND, TROLL] = [21, 22, 23].map(uid);
+
+  it('the first person can claim site admin, and only once', async () => {
+    await t.user(FIRST, { name: 'dave' });
+    await t.user(SECOND, { name: 'helper' });
+    await t.user(TROLL, { name: 'troll' });
+    expect((await t.as(null, `select public.site_admin_exists() as e`))[0].e).toBe(false);
+    await t.as(FIRST, `select public.claim_site_admin()`);
+    await fails(t.as(TROLL, `select public.claim_site_admin()`), /already a site admin/);
+    expect((await t.as(FIRST, `select public.is_site_admin() as a`))[0].a).toBe(true);
+    expect((await t.as(TROLL, `select public.is_site_admin() as a`))[0].a).toBe(false);
+  });
+
+  it('admins add admins by Discord username; the last admin stays', async () => {
+    await fails(t.as(TROLL, `select public.add_site_admin('troll')`), /site admin only/);
+    await t.as(FIRST, `select public.add_site_admin('HELPER')`);
+    expect(await t.as(SECOND, `select user_id from public.site_admins order by added_at`)).toHaveLength(2);
+    expect(await t.as(TROLL, `select user_id from public.site_admins`)).toHaveLength(0);
+    await t.as(SECOND, `select public.remove_site_admin($1)`, [SECOND]);
+    await fails(t.as(FIRST, `select public.remove_site_admin($1)`, [FIRST]), /last site admin/);
+    await fails(t.as(FIRST, `select public.add_site_admin('nobody-here')`), /no user with Discord username/);
+  });
+
+  it('admins block and unblock users, but not other admins', async () => {
+    await fails(t.as(TROLL, `select public.block_user($1, 'payback')`, [FIRST]), /site admin only/);
+    await fails(t.as(FIRST, `select public.block_user($1)`, [FIRST]), /cannot be blocked/);
+    await t.as(FIRST, `select public.block_user($1, 'Scam posts')`, [TROLL]);
+    expect((await t.as(TROLL, `select public.is_blocked() as b`))[0].b).toBe(true);
+    expect(await t.as(TROLL, `select * from public.blocked_users`)).toHaveLength(0);
+    expect((await t.as(FIRST, `select reason from public.blocked_users`))[0].reason).toBe('Scam posts');
+    await t.as(FIRST, `select public.unblock_user($1)`, [TROLL]);
+    expect((await t.as(TROLL, `select public.is_blocked() as b`))[0].b).toBe(false);
+  });
+});
