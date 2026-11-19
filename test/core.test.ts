@@ -211,3 +211,51 @@ describe('site admins and blocking', () => {
     expect((await t.as(TROLL, `select public.is_blocked() as b`))[0].b).toBe(false);
   });
 });
+
+describe('notifications, feedback and error reports', () => {
+  const [A, B, ADM] = [31, 32, 33].map(uid);
+
+  it('notifications are private, de-duplicated, and only made by the database', async () => {
+    await t.user(A, { name: 'aaa' });
+    await t.user(B, { name: 'bbb' });
+    await t.db.query(`select public.notify($1, 'market', 'offer', 'New offer on Gold', 'Bob offers 30k', '#post=1')`, [A]);
+    await t.db.query(`select public.notify($1, 'market', 'offer', 'New offer on Gold', 'again', null)`, [A]); // duplicate within 10 min
+    await t.db.query(`select public.notify($1, 'ops', 'seat', 'Seat', null, 'javascript:alert(1)')`, [A]);
+    const mine = await t.as(A, `select title, link from public.notifications order by id`);
+    expect(mine).toEqual([{ title: 'New offer on Gold', link: '#post=1' }, { title: 'Seat', link: null }]);
+    expect(await t.as(B, `select id from public.notifications`)).toHaveLength(0);
+    await fails(t.as(A, `select public.notify($1, 'x', 'x', 'spoof')`, [B]), /permission denied/);
+    await fails(t.as(A, `insert into public.notifications (user_id, tool, kind, title) values ($1, 'x', 'x', 'spoof')`, [B]), /permission denied/);
+    await t.as(A, `select public.mark_notifications_read()`);
+    expect((await t.as(A, `select count(*)::int as n from public.notifications where read_at is null`))[0].n).toBe(0);
+  });
+
+  it('tells people when their org access changes', async () => {
+    const [{ id: org }] = await t.as<{ id: string }>(A, `select id from public.create_org('Notify Org', 'notify-org', null)`);
+    await t.db.query(`insert into public.org_members (org_id, user_id) values ($1, $2)`, [org, B]);
+    await t.as(A, `select public.set_member_access($1, $2, 'officer')`, [org, B]);
+    expect((await t.as(B, `select title, link from public.notifications`))[0]).toEqual({ title: 'You are now officer in Notify Org', link: `#org=${org}` });
+  });
+
+  it('anyone can send feedback (rate-limited); only admins read it', async () => {
+    await t.user(ADM, { name: 'adm' });
+    await t.db.query(`delete from public.site_admins`);
+    await t.db.query(`insert into public.site_admins (user_id) values ($1)`, [ADM]);
+    await t.as(A, `select public.submit_feedback('cargo', 'bug', 'The 3D view is blank on my phone', 'https://scda-cargo.pages.dev/', 'test')`);
+    await t.as(null, `select public.submit_feedback('hub', 'idea', 'Add a dark mode toggle')`);
+    await fails(t.as(A, `select public.submit_feedback('hub', 'rant', 'x x x')`), /check constraint/);
+    expect(await t.as(A, `select id from public.feedback`)).toHaveLength(0);
+    expect((await t.as(ADM, `select kind, user_id from public.feedback order by id`)).map((r) => r.kind)).toEqual(['bug', 'idea']);
+    for (let i = 0; i < 9; i++) await t.as(B, `select public.submit_feedback('hub', 'other', 'note number ${i}')`);
+    await t.as(B, `select public.submit_feedback('hub', 'other', 'tenth note')`);
+    await fails(t.as(B, `select public.submit_feedback('hub', 'other', 'eleventh note')`), /try again later/);
+  });
+
+  it('browser errors are grouped by message and only admins see them', async () => {
+    await t.as(null, `select public.report_client_error('trade', 'TypeError: x is undefined', 'at foo', '/', 'ua')`);
+    await t.as(A, `select public.report_client_error('trade', 'TypeError: x is undefined', null, '/routes', 'ua')`);
+    const [e] = await t.as(ADM, `select message, count, page, stack from public.client_errors`);
+    expect(e).toEqual({ message: 'TypeError: x is undefined', count: 2, page: '/routes', stack: 'at foo' });
+    expect(await t.as(A, `select id from public.client_errors`)).toHaveLength(0);
+  });
+});
