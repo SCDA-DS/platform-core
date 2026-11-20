@@ -102,3 +102,13 @@ describe('Discord DMs', () => {
     await expect(t.as(PLAYER, `select public.test_discord_dm()`)).rejects.toThrow(/give it a minute/);
   });
 });
+
+describe('donate link', () => {
+  it('admins set a donation-site link that anyone can read; other sites are refused', async () => {
+    expect((await t.as<{ l: { donate_url: string | null } }>(null, `select public.site_links() as l`))[0].l).toEqual({ donate_url: null });
+    await expect(t.as(ADMIN, `insert into public.site_settings (key, value) values ('donate_url', 'https://evil.example/pay')`)).rejects.toThrow(/site_settings_values_check/);
+    await expect(t.as(PLAYER, `insert into public.site_settings (key, value) values ('donate_url', 'https://ko-fi.com/scorgtools')`)).rejects.toThrow();
+    await t.as(ADMIN, `insert into public.site_settings (key, value) values ('donate_url', 'https://ko-fi.com/scorgtools')`);
+    expect((await t.as<{ l: { donate_url: string } }>(null, `select public.site_links() as l`))[0].l.donate_url).toBe('https://ko-fi.com/scorgtools');
+  });
+});
